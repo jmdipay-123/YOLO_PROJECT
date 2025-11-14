@@ -58,6 +58,9 @@
       // Optional: Add success feedback
       showSuccess('Camera started successfully');
 
+      // Dispatch event for detection to start
+      document.dispatchEvent(new CustomEvent('cameraStarted'));
+
     } catch (error) {
       console.error('Error accessing camera:', error);
       
@@ -101,6 +104,9 @@
 
     // Optional: Add feedback
     showSuccess('Camera stopped');
+
+    // Dispatch event for detection to stop
+    document.dispatchEvent(new CustomEvent('cameraStopped'));
   }
 
   // Show loading state
