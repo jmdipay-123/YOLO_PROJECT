@@ -13,7 +13,8 @@
     confidenceThreshold: 40, // 40% minimum confidence
     overlapThreshold: 30,
     maxObjects: 20,
-    fps: 4 // Detection frames per second
+    fps: 4, // Detection frames per second
+    apiBase: 'https://detect.roboflow.com' // Hosted API base
   };
 
   // ========================================
@@ -64,7 +65,8 @@
   async function initializeRoboflow() {
     try {
       console.log('Roboflow Serverless API ready');
-      console.log(`Endpoint: https://serverless.roboflow.com/${ROBOFLOW_CONFIG.workspaceId}/${ROBOFLOW_CONFIG.modelId}/${ROBOFLOW_CONFIG.version}`);
+      console.log(`Endpoint: https://detect.roboflow.com/${ROBOFLOW_CONFIG.modelId}/${ROBOFLOW_CONFIG.version}`);
+
       
       // For API-based detection, no initialization needed
       model = { ready: true };
@@ -155,88 +157,98 @@
   }
 
   // ========================================
-  // DETECT OBJECTS (Using Roboflow Serverless API)
+  // DETECT OBJECTS 
   // ========================================
-  async function detectObjects() {
-    if (!videoPreview || !videoPreview.videoWidth) {
-      return;
-    }
-
-    try {
-      // Capture current video frame as Blob
-      const imageBlob = await captureVideoFrameAsBlob();
-      if (!imageBlob) {
-        return;
-      }
-
-      // CORRECTED: Use serverless.roboflow.com (as shown in Network tab)
-      const apiUrl = `https://serverless.roboflow.com/${ROBOFLOW_CONFIG.workspaceId}/${ROBOFLOW_CONFIG.modelId}/${ROBOFLOW_CONFIG.version}`;
-      
-      // Create FormData and append image
-      const formData = new FormData();
-      formData.append('file', imageBlob, 'frame.jpg');
-      
-      // Make API request with FormData
-      const response = await fetch(`${apiUrl}?api_key=${ROBOFLOW_CONFIG.apiKey}`, {
-        method: 'POST',
-        body: formData
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('API Error:', response.status, errorText);
-        throw new Error(`API request failed: ${response.status}`);
-      }
-
-      const data = await response.json();
-      
-      // Check if we got valid predictions
-      if (!data.predictions) {
-        console.warn('No predictions in response');
-        return;
-      }
-
-      // Filter by confidence threshold
-      const filteredPredictions = data.predictions.filter(
-        pred => pred.confidence * 100 >= ROBOFLOW_CONFIG.confidenceThreshold
-      );
-
-      // Draw results
-      drawDetections(filteredPredictions);
-
-      // Announce detections
-      announceDetections(filteredPredictions);
-
-    } catch (error) {
-      console.error('Error during detection:', error);
-    }
+async function detectObjects() {
+  if (!videoPreview || !videoPreview.videoWidth) {
+    return;
   }
 
-  // ========================================
-  // CAPTURE VIDEO FRAME AS BLOB
-  // ========================================
-  async function captureVideoFrameAsBlob() {
-    return new Promise((resolve) => {
-      try {
-        // Create a temporary canvas
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = videoPreview.videoWidth;
-        tempCanvas.height = videoPreview.videoHeight;
-        
-        const tempCtx = tempCanvas.getContext('2d');
-        tempCtx.drawImage(videoPreview, 0, 0);
-        
-        // Convert canvas to Blob (JPEG format)
-        tempCanvas.toBlob((blob) => {
-          resolve(blob);
-        }, 'image/jpeg', 0.8);
-        
-      } catch (error) {
-        console.error('Error capturing frame:', error);
-        resolve(null);
-      }
+  try {
+    // 1) Get base64 data URL from current frame
+    const dataUrl = captureVideoFrameAsDataURL();
+    if (!dataUrl) return;
+
+    // 2) Hosted API endpoint
+    const apiUrl = `${ROBOFLOW_CONFIG.apiBase}/${ROBOFLOW_CONFIG.modelId}/${ROBOFLOW_CONFIG.version}`;
+    
+    // Send the base64 string as the body (no JSON wrapper), like the cURL example
+    const response = await fetch(`${apiUrl}?api_key=${ROBOFLOW_CONFIG.apiKey}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: dataUrl   // "data:image/jpeg;base64,...."
     });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('API Error:', response.status, errorText);
+      throw new Error(`API request failed: ${response.status}`);
+    }
+
+    const data = await response.json();
+    console.log('Roboflow raw response:', data);
+
+    const predictions = Array.isArray(data?.predictions) ? data.predictions : [];
+    console.log('Predictions count:', predictions.length);
+
+    const filteredPredictions = predictions.filter(
+      p => (p.confidence * 100) >= ROBOFLOW_CONFIG.confidenceThreshold
+    );
+    console.log('Filtered predictions count:', filteredPredictions.length);
+
+    drawDetections(filteredPredictions);
+    announceDetections(filteredPredictions);
+
+  } catch (error) {
+    console.error('Error during detection:', error);
   }
+}
+
+
+
+
+// Capture current video frame as base64 (no data:image/jpeg prefix)
+async function captureVideoFrameAsBase64() {
+  try {
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = videoPreview.videoWidth;
+    tempCanvas.height = videoPreview.videoHeight;
+
+    const tempCtx = tempCanvas.getContext('2d');
+    tempCtx.drawImage(videoPreview, 0, 0);
+
+    // dataURL looks like "data:image/jpeg;base64,AAAA..."
+    const dataUrl = tempCanvas.toDataURL('image/jpeg', 0.8);
+    const parts = dataUrl.split(',');
+
+    // Return only the base64 part (what detect.roboflow.com expects)
+    return parts[1] || null;
+  } catch (err) {
+    console.error('Error capturing frame as base64:', err);
+    return null;
+  }
+}
+
+function captureVideoFrameAsDataURL() {
+  try {
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = videoPreview.videoWidth;
+    tempCanvas.height = videoPreview.videoHeight;
+
+    const tempCtx = tempCanvas.getContext('2d');
+    tempCtx.drawImage(videoPreview, 0, 0);
+
+    // This gives: "data:image/jpeg;base64,...."
+    return tempCanvas.toDataURL('image/jpeg', 0.8);
+  } catch (error) {
+    console.error('Error capturing frame:', error);
+    return null;
+  }
+}
+
+
 
   // ========================================
   // DRAW DETECTIONS
